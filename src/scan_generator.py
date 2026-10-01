@@ -202,3 +202,11 @@ def main():
     if args.notify:
         print("Checking notification channels...")
         discord_webhook = os.getenv("DISCORD_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK")
+        if discord_webhook and discord_webhook.strip():
+            print("[Discord] Webhook detected. Sending payload...")
+            send_discord_notification(discord_webhook, digest_md)
+        else:
+            print("[Discord] Status: No Discord webhook configured. (DISCORD_WEBHOOK_URL is empty).")
+
+if __name__ == "__main__":
+    main()
