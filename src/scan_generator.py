@@ -12,13 +12,43 @@ def get_current_date_str(tz_offset_hours=7):
     now = datetime.now(tz)
     return now.strftime("%A, %d %B %Y"), now.strftime("%Y-%m-%d")
 
-def generate_with_gemini(api_key: str, date_display: str) -> str:
+def discover_active_model(api_key: str) -> str:
     """
-    Calls Google Gemini API (v1beta) using standard library urllib.
-    Returns markdown-formatted daily scan.
+    Dynamically queries Google AI's model catalog to pick the newest active
+    model supporting generateContent, avoiding deprecated/retired versions.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            valid_models = []
+            for m in data.get("models", []):
+                methods = m.get("supportedGenerationMethods", [])
+                name = m.get("name", "").replace("models/", "")
+                if "generateContent" in methods:
+                    valid_models.append(name)
+            
+            # Filter for flash models, sort descending to take the newest version
+            flash_models = [m for m in valid_models if "flash" in m and "exp" not in m]
+            if flash_models:
+                flash_models.sort(reverse=True)
+                return flash_models[0]
+            if valid_models:
+                valid_models.sort(reverse=True)
+                return valid_models[0]
+    except Exception as e:
+        print(f"[Gemini API] Dynamic discovery failed ({e}), using default fallback pool.", file=sys.stderr)
     
+    return "gemini-3.0-flash"
+
+def generate_with_gemini(api_key: str, date_display: str) -> str:
+    # Auto-discover active model from Google's live catalog
+    best_model = discover_active_model(api_key)
+    candidate_models = [best_model, "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+    candidate_models = list(dict.fromkeys(candidate_models))
+    print(f"[Gemini API] Active model priority pool: {candidate_models}")
+
     prompt = f"""You are an undergraduate Informatics (Computer Science) student living in Surabaya, East Java, Indonesia.
 Your voice is analytical, practical, tech-savvy, and slightly informal yet sharp (reflecting a dedicated university student trying to survive lab assignments while chasing hackathons and scholarships).
 
@@ -62,21 +92,38 @@ Output only the raw Markdown without enclosing code fences.
         }
     }
 
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
-    )
+    last_error = None
+    for model_name in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            candidate = data.get("candidates", [])[0]
-            content_text = candidate.get("content", {}).get("parts", [])[0].get("text", "")
-            return content_text.strip()
-    except Exception as e:
-        print(f"[Gemini API] Error generating content: {e}", file=sys.stderr)
-        return ""
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                candidate = data.get("candidates", [])[0]
+                content_text = candidate.get("content", {}).get("parts", [])[0].get("text", "")
+                if content_text and content_text.strip():
+                    print(f"[Gemini API] Successfully generated using: {model_name}")
+                    return content_text.strip()
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code == 404:
+                print(f"[Gemini API] Model '{model_name}' 404. Falling forward...")
+                continue
+            else:
+                print(f"[Gemini API] Model '{model_name}' HTTP Error: {e.code} - {e.reason}", file=sys.stderr)
+                continue
+        except Exception as e:
+            last_error = e
+            print(f"[Gemini API] Model '{model_name}' error: {e}", file=sys.stderr)
+            continue
+
+    print(f"[Gemini API] All models exhausted. Last error: {last_error}", file=sys.stderr)
+    return ""
 
 def fallback_template(date_display: str) -> str:
     return f"""📅 **{date_display} | Surabaya, WIB**
@@ -105,13 +152,12 @@ Take an evening to verify your NIK and student credentials on the [Digital Talen
 def generate_digest_markdown(date_display: str) -> str:
     gemini_key = os.getenv("GEMINI_API_KEY")
     if gemini_key and gemini_key.strip():
-        print("[Gemini API] API key detected. Requesting dynamic daily scan...")
+        print("[Gemini API] API key detected. Querying active model catalog...")
         dynamic_content = generate_with_gemini(gemini_key.strip(), date_display)
         if dynamic_content:
-            print("[Gemini API] Dynamic scan generated successfully.")
             return dynamic_content
         else:
-            print("[Gemini API] Warning: API returned empty or failed. Using fallback template.")
+            print("[Gemini API] Warning: Generation failed. Using fallback template.")
     else:
         print("[Digest] Notice: GEMINI_API_KEY not found in environment. Using curated template.")
         
@@ -156,11 +202,3 @@ def main():
     if args.notify:
         print("Checking notification channels...")
         discord_webhook = os.getenv("DISCORD_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK")
-        if discord_webhook and discord_webhook.strip():
-            print("[Discord] Webhook detected. Sending payload...")
-            send_discord_notification(discord_webhook, digest_md)
-        else:
-            print("[Discord] Status: No Discord webhook configured. (DISCORD_WEBHOOK_URL is empty).")
-
-if __name__ == "__main__":
-    main()
