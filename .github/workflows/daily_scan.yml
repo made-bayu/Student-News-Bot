@@ -24,8 +24,9 @@ jobs:
 
       - name: Generate Daily Scan & Send Notifications
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || vars.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
+          echo "Secret check: [$DISCORD_WEBHOOK_URL]"
           python src/scan_generator.py --notify
 
       - name: Commit and Push New Digest
