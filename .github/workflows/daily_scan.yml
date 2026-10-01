@@ -2,7 +2,7 @@ name: Daily Tech & Opportunity Scan
 
 on:
   schedule:
-    # Runs at 01:00 UTC daily (08:00 WIB in Surabaya)
+    # Runs at 01:12 UTC daily (08:00 WIB in Surabaya)
     - cron: '12 1 * * *'
   workflow_dispatch:
 
