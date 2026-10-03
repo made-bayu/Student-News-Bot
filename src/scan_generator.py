@@ -41,10 +41,6 @@ def discover_active_models(api_key: str) -> list:
         return ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]
 
 def clean_model_output(raw_text: str, date_display: str) -> str:
-    """
-    Strips out any Chain-of-Thought or reasoning scratchpad leaked by the LLM
-    and ensures output starts directly with the standard header.
-    """
     marker = f"📅 **{date_display} | Surabaya, WIB**"
     if marker in raw_text:
         return raw_text[raw_text.index(marker):].strip()
@@ -56,6 +52,32 @@ def clean_model_output(raw_text: str, date_display: str) -> str:
         return raw_text[line_start if line_start != -1 else 0:].strip()
 
     return raw_text.strip()
+
+def call_gemini_api(api_key: str, model_name: str, prompt: str, use_search: bool = True) -> str:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 2048
+        }
+    }
+    if use_search:
+        payload["tools"] = [{"googleSearch": {}}]
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=35) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if parts:
+                return parts[0].get("text", "").strip()
+    return ""
 
 def generate_with_gemini(api_key: str, date_display: str) -> str:
     candidate_models = discover_active_models(api_key)
@@ -86,51 +108,4 @@ Structure:
 
 ### [**Headline 2 with bold opportunity keyword**]
 
-* **Summary**: (3-4 sentences max: Real upcoming dates, criteria, official portal links for scholarships like IISMA/LPDP/DTS or hackathons like Gemastik).
-* **Practical Student Takeaway**: (Actionable prep steps: GitHub portfolio enhancement, algorithm problem solving, or administrative verification).
-
-Output only clean, raw Markdown without code fences or internal thought scratchpads.
-"""
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"googleSearch": {}}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 2048
-        }
-    }
-
-    for model_name in candidate_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=35) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                candidates = data.get("candidates", [])
-                if candidates:
-                    content_text = candidates[0].get("content", {}).get("parts", [])[0].get("text", "")
-                    if content_text and content_text.strip():
-                        sanitized = clean_model_output(content_text, date_display)
-                        print(f"[Gemini API] Successfully generated grounded scan using: {model_name}", flush=True)
-                        return sanitized
-        except urllib.error.HTTPError as e:
-            if e.code == 400:
-                fallback_payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1800}
-                }
-                req_fb = urllib.request.Request(
-                    url,
-                    data=json.dumps(fallback_payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"}
-                )
-                try:
-                    with urllib.request.urlopen(req_fb, timeout=30) as resp2:
-                        d2 = json.loads(resp2.read().decode("utf-8"))
-                        cand2 = d
+* **Summary**: (3-4 sentences max: Real upcoming dates, criteria, official portal links for scholarships like IISMA/LPDP/DTS or hack
