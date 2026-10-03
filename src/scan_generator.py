@@ -7,17 +7,11 @@ import urllib.request
 import urllib.error
 
 def get_current_date_str(tz_offset_hours=7):
-    # Default to UTC+7 (WIB / Surabaya)
     tz = timezone(timedelta(hours=tz_offset_hours))
     now = datetime.now(tz)
     return now.strftime("%A, %d %B %Y"), now.strftime("%Y-%m-%d")
 
 def discover_active_models(api_key: str) -> list:
-    """
-    Dynamically queries Google AI's model catalog to pick active models
-    supporting generateContent, prioritizing stable non-preview models
-    to avoid 429 quota (limit 0) errors.
-    """
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
         req = urllib.request.Request(url)
@@ -30,7 +24,6 @@ def discover_active_models(api_key: str) -> list:
                 if "generateContent" in methods:
                     valid_models.append(name)
             
-            # Prioritize stable flash models that are NOT preview/omni to avoid 0-quota traps
             stable_flash = [
                 m for m in valid_models 
                 if "flash" in m and "preview" not in m and "omni" not in m
@@ -41,28 +34,31 @@ def discover_active_models(api_key: str) -> list:
             ]
             
             ordered = stable_flash + other_models
-            if not ordered:
-                ordered = valid_models
-            print(f"[Gemini API] Available models in your account: {ordered}", flush=True)
-            return ordered
+            return ordered if ordered else valid_models
     except Exception as e:
-        print(f"[Gemini API] Dynamic discovery failed ({e}), using default fallback pool.", file=sys.stderr, flush=True)
-        return ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash-latest"]
+        print(f"[Gemini API] Discovery failed ({e}), using fallback.", file=sys.stderr, flush=True)
+        return ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]
 
 def generate_with_gemini(api_key: str, date_display: str) -> str:
     candidate_models = discover_active_models(api_key)
     if not candidate_models:
-        print("[Gemini API] No valid models found in catalog.", file=sys.stderr, flush=True)
         return ""
 
     prompt = f"""You are an undergraduate Informatics (Computer Science) student living in Surabaya, East Java, Indonesia.
-Your voice is analytical, practical, tech-savvy, and slightly informal yet sharp (reflecting a dedicated university student trying to survive lab assignments while chasing hackathons and scholarships).
+Your voice is analytical, practical, tech-savvy, and slightly informal yet sharp.
 
-Generate a daily scan of technology news and higher education opportunities for today: {date_display}.
+Perform a daily scan for today: {date_display}.
+Search and retrieve real, factual, up-to-date events. Do not invent or hallucinate news, models, or deadlines.
 
-Provide exactly two (2) distinct, high-impact news summaries:
-1. Item 1 (AI & Tech Development): Focus on open-source LLMs, local AI agents, model efficiency, practical software engineering tools (e.g. llama.cpp, vLLM, quantization, local agent frameworks). Emphasize why it matters for developers/students.
-2. Item 2 (Scholarship / Student Opportunities / Tech Policy): Focus on scholarship openings (e.g., IISMA, Beasiswa Unggulan, LPDP, Kominfo DTS, tech exchange programs), university AI competitions, or tech ecosystem updates in Indonesia / Southeast Asia.
+Generate exactly two (2) distinct, high-impact news summaries:
+
+1. Item 1 (AI & Tech Development):
+   - Focus on open-source LLMs, local AI agents, model efficiency, practical software engineering tools (e.g., llama.cpp, vLLM, GGUF/AWQ quantization, local RAG pipelines, CUDA/ROCm optimization).
+   - Practical Student Takeaway: Detail specific Informatics/CS skills to acquire or apply (e.g. system programming, memory management on limited hardware, Docker containerization, REST API integration, final project / Tugas Akhir implementation).
+
+2. Item 2 (Scholarship / Student Opportunities / Tech Policy):
+   - Focus on verified scholarship openings (e.g., IISMA, Beasiswa Unggulan, LPDP, Kominfo DTS, exchange programs), national/university hackathons (e.g., Gemastik), or Indonesian tech ecosystem updates.
+   - Practical Student Takeaway: Detail actionable preparation skills (e.g., GitHub portfolio projects, algorithm problem solving, English certification, administrative verification).
 
 Format strictly as:
 📅 **{date_display} | Surabaya, WIB**
@@ -71,24 +67,25 @@ Format strictly as:
 
 ### [**Headline 1 with bold technical keyword**]
 
-* **Summary**: (3-4 sentences max: What happened and core mechanism, include clickable markdown links if referencing official projects).
-* **Practical Student Takeaway**: (Why it matters for an Informatics major: coursework, local computing constraints, final project / Tugas Akhir).
+* **Summary**: (3-4 sentences max: What happened and core technical mechanism. Cite real project/paper links using markdown [Title](URL)).
+* **Practical Student Takeaway**: (Concrete technical skills, coursework relevance, and hardware workaround for local laptops).
 
 ---
 
 ### [**Headline 2 with bold opportunity keyword**]
 
-* **Summary**: (3-4 sentences max: Key dates, criteria, or program details, include official links).
-* **Practical Student Takeaway**: (Actionable steps: preparation, portal verification, GitHub portfolio / CV angle).
+* **Summary**: (3-4 sentences max: Real dates, eligibility criteria, and official registration portal links).
+* **Practical Student Takeaway**: (Actionable preparation steps, portfolio enhancement, and CV skills).
 
-Output only the raw Markdown without enclosing code fences.
+Output only clean, raw Markdown without code block fences.
 """
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
+        "tools": [{"googleSearch": {}}],
         "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 1000
+            "temperature": 0.3,
+            "maxOutputTokens": 1200
         }
     }
 
@@ -101,22 +98,42 @@ Output only the raw Markdown without enclosing code fences.
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=35) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 candidates = data.get("candidates", [])
                 if candidates:
                     content_text = candidates[0].get("content", {}).get("parts", [])[0].get("text", "")
                     if content_text and content_text.strip():
-                        print(f"[Gemini API] Successfully generated using model: {model_name}", flush=True)
+                        print(f"[Gemini API] Successfully generated grounded scan using: {model_name}", flush=True)
                         return content_text.strip()
         except urllib.error.HTTPError as e:
-            print(f"[Gemini API] Model '{model_name}' skipped: HTTP {e.code} ({e.reason})", flush=True)
+            if e.code == 400:
+                # Fallback if specific model tier disallows tool schema
+                fallback_payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1000}
+                }
+                req_fb = urllib.request.Request(
+                    url,
+                    data=json.dumps(fallback_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                try:
+                    with urllib.request.urlopen(req_fb, timeout=30) as resp2:
+                        d2 = json.loads(resp2.read().decode("utf-8"))
+                        cand2 = d2.get("candidates", [])
+                        if cand2:
+                            c_text = cand2[0].get("content", {}).get("parts", [])[0].get("text", "")
+                            if c_text and c_text.strip():
+                                return c_text.strip()
+                except Exception:
+                    pass
+            print(f"[Gemini API] Model '{model_name}' skipped: HTTP {e.code}", flush=True)
             continue
         except Exception as e:
             print(f"[Gemini API] Model '{model_name}' error: {e}", flush=True)
             continue
 
-    print("[Gemini API] All candidate models exhausted without successful generation.", file=sys.stderr, flush=True)
     return ""
 
 def fallback_template(date_display: str) -> str:
@@ -146,12 +163,12 @@ Take an evening to verify your NIK and student credentials on the [Digital Talen
 def generate_digest_markdown(date_display: str) -> str:
     gemini_key = os.getenv("GEMINI_API_KEY")
     if gemini_key and gemini_key.strip():
-        print("[Gemini API] API key detected. Querying active model catalog...", flush=True)
+        print("[Gemini API] API key detected. Initiating grounded daily scan...", flush=True)
         dynamic_content = generate_with_gemini(gemini_key.strip(), date_display)
         if dynamic_content:
             return dynamic_content
         else:
-            print("[Gemini API] Warning: Dynamic generation failed. Using fallback template.", flush=True)
+            print("[Gemini API] Warning: Dynamic generation returned empty. Using fallback template.", flush=True)
     else:
         print("[Digest] Notice: GEMINI_API_KEY not found in environment. Using curated template.", flush=True)
         
